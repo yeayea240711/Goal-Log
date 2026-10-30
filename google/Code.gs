@@ -17,7 +17,7 @@
 
 const PASSCODE = 'change-me';
 const EMAIL = '';
-const SITE_URL = 'https://yeayea240711.github.io/goal-log/';
+const SITE_URL = 'https://yeayea240711.github.io/Goal-Log/';
 const MORNING_HOUR = 7;      // the "today's plan" email, in the script's time zone. Set to -1 to turn it off.
 const ASK_AFTER_MIN = 60;    // this long after a task's time, you get a "did you do it?" email
 

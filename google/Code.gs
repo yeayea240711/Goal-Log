@@ -20,11 +20,15 @@ const EMAIL = '';
 const SITE_URL = 'https://yeayea240711.github.io/Goal-Log/';
 const MORNING_HOUR = 7;      // the "today's plan" email, in the script's time zone. Set to -1 to turn it off.
 const ASK_AFTER_MIN = 60;    // this long after a task's time, you get a "did you do it?" email
+const WORKOUT_HOURS = [17, 19, 21];  // on a workout day with no finished workout, you get an email at these hours
 
 const SHEET_NAME = 'Tasks';
 const COLS = ['When', 'Task', 'Level', 'Status', 'Why missed', 'Remind from', 'Every (min)',
   'id', 'start_at', 'nag_at', 'last_emailed', 'asked', 'Created', 'Updated'];
 const LEVELS = ['light', 'normal', 'cantmiss'];
+const LIFT_SHEET = 'Lift';   // the workout log: one row per workout, diet day, or your settings
+const LIFT_COLS = ['id', 'kind', 'day', 'json', 'updated'];
+const MAX_DOC = 45000;       // a Sheet cell holds 50,000 characters
 
 // ---------- web entry points ----------
 function doGet(e) {
@@ -88,6 +92,35 @@ const ACTIONS = {
     return { ok: true };
   },
 
+  // ---------- workouts (the Workouts page) ----------
+  lift_list: () => liftAll_().filter(d => d.kind !== 'miss').map(d => ({ id: d.id, data: d.data })),
+
+  lift_put: b => { liftPut_(b.id, b.data); return { ok: true }; },
+
+  lift_del: b => {
+    const d = liftAll_().find(x => x.id === b.id);
+    if (d) liftSheet_().deleteRow(d._row);
+    return { ok: true };
+  },
+
+  lift_import: b => {
+    const docs = Array.isArray(b.docs) ? b.docs : [];
+    if (docs.length > 2000) throw err_('That file is too big to import at once.');
+    const rows = liftAll_();
+    docs.forEach(d => liftPut_(d.id, d.data, rows));
+    return { count: docs.length };
+  },
+
+  // workout days you skipped in the last week, for the "Did you do these?" list
+  workout_misses: () => workoutMisses_(7),
+
+  workout_reason: b => {
+    const day = String(b.day || '');
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) throw err_('Unknown day.');
+    liftPut_('m-' + day, { kind: 'miss', day, reason: cut_(b.reason, 500) });
+    return { ok: true };
+  },
+
   test_email: () => {
     MailApp.sendEmail({ to: to_(), subject: 'Goal Log: test reminder',
       htmlBody: wrap_('<p>Reminder emails are working. You\'ll get these on your phone wherever Gmail is signed in.</p>') });
@@ -99,6 +132,7 @@ const ACTIONS = {
 // Run once from the editor. Starts the reminder check and the morning email.
 function setup() {
   sheet_();
+  liftSheet_();
   ScriptApp.getProjectTriggers()
     .filter(t => ['checkReminders', 'morningPlan'].indexOf(t.getHandlerFunction()) >= 0)
     .forEach(t => ScriptApp.deleteTrigger(t));
@@ -135,7 +169,28 @@ function checkReminders() {
       r.last_emailed = iso_(latest);
       save_(r);
     });
+    workoutReminder_();
   });
+}
+
+// On a workout day, nag at WORKOUT_HOURS until a workout is finished.
+function workoutReminder_() {
+  const tz = Session.getScriptTimeZone(), now = new Date();
+  const today = Utilities.formatDate(now, tz, 'yyyy-MM-dd');
+  const hour = Number(Utilities.formatDate(now, tz, 'H'));
+  const slot = WORKOUT_HOURS.filter(h => h <= hour).pop();
+  if (slot === undefined) return;
+  const key = today + ' ' + slot, props = PropertiesService.getScriptProperties();
+  if (props.getProperty('workout_emailed') === key) return;
+  const w = workoutState_();
+  if (!w.isPlanDay(today) || w.doneDays[today]) return;
+  props.setProperty('workout_emailed', key);
+  const last = slot === WORKOUT_HOURS[WORKOUT_HOURS.length - 1];
+  const site = SITE_URL + 'workouts.html';
+  MailApp.sendEmail({ to: to_(), subject: (last ? '🔔 Last call: ' : '🏋️ ') + 'Workout day',
+    htmlBody: wrap_('<p style="font-size:18px;margin:0 0 6px"><b>Today is a workout day.</b></p><p style="margin:0">You haven\'t finished a workout yet.' +
+      (last ? ' This is the last reminder today.' : '') + '</p>' +
+      '<p style="margin:18px 0 0"><a href="' + site + '" style="background:#1d6b57;color:#fff;padding:10px 16px;border-radius:8px;text-decoration:none;font-weight:600">Open Workouts</a></p>') });
 }
 
 // Each morning: today's tasks and anything still waiting for an answer.
@@ -146,11 +201,16 @@ function morningPlan() {
   const todays = all.filter(r => r.status === 'open' && Utilities.formatDate(new Date(toMs_(r.start_at)), tz, 'yyyy-MM-dd') === today)
     .sort((a, b) => toMs_(a.start_at) - toMs_(b.start_at));
   const waiting = all.filter(r => r.status === 'open' && toMs_(r.start_at) < Date.now() - ASK_AFTER_MIN * 60000);
-  if (!todays.length && !waiting.length) return;
+  const w = workoutState_();
+  const workoutToday = w.isPlanDay(today) && !w.doneDays[today];
+  const skipped = workoutMisses_(7).filter(m => !m.reason);
+  if (!todays.length && !waiting.length && !workoutToday && !skipped.length) return;
   let html = '';
+  if (workoutToday) html += '<p style="font-size:16px;margin:0 0 12px">🏋️ <b>Workout day today.</b></p>';
   if (todays.length) html += '<h3 style="margin:0 0 8px">Today</h3><ul>' + todays.map(r => '<li><b>' + time_(r.start_at) + '</b> ' + esc_(r.title) + (r.level === 'cantmiss' ? ' <span style="color:#b13a2d">(can\'t miss)</span>' : '') + '</li>').join('') + '</ul>';
   if (waiting.length) html += '<h3 style="margin:16px 0 8px">Still waiting on an answer</h3><ul>' + waiting.map(r => '<li>' + esc_(r.title) + ' (' + when_(r.start_at) + ')</li>').join('') + '</ul>';
-  MailApp.sendEmail({ to: to_(), subject: 'Today: ' + (todays.length ? todays.length + ' task' + (todays.length > 1 ? 's' : '') : 'nothing scheduled'), htmlBody: wrap_(html) });
+  if (skipped.length) html += '<h3 style="margin:16px 0 8px">Workouts you skipped</h3><ul>' + skipped.map(m => '<li>' + dayName_(m.day) + '</li>').join('') + '</ul><p style="margin:0">Say why in Goal Log.</p>';
+  MailApp.sendEmail({ to: to_(), subject: 'Today: ' + (todays.length ? todays.length + ' task' + (todays.length > 1 ? 's' : '') : workoutToday ? 'workout day' : 'nothing scheduled') + (todays.length && workoutToday ? ' + workout' : ''), htmlBody: wrap_(html) });
 }
 
 // ---------- reminder schedule ----------
@@ -228,6 +288,74 @@ function public_(r) {
   return { id: r.id, title: r.title, start_at: r.start_at, nag_at: r.nag_at || null, every: r.every,
     level: r.level, status: r.status, reason: r.reason };
 }
+
+// ---------- workout sheet ----------
+function liftSheet_() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let sh = ss.getSheetByName(LIFT_SHEET);
+  if (!sh) {
+    sh = ss.insertSheet(LIFT_SHEET);
+    sh.getRange(1, 1, 1, LIFT_COLS.length).setValues([LIFT_COLS]).setFontWeight('bold');
+    sh.setFrozenRows(1);
+    sh.getRange(1, 1, sh.getMaxRows(), LIFT_COLS.length).setNumberFormat('@');
+  }
+  return sh;
+}
+function liftAll_() {
+  const sh = liftSheet_();
+  const n = sh.getLastRow() - 1;
+  if (n < 1) return [];
+  return sh.getRange(2, 1, n, LIFT_COLS.length).getValues().map((v, i) => {
+    let data = null;
+    try { data = JSON.parse(String(v[3])); } catch (e) {}
+    return { _row: i + 2, id: String(v[0]), kind: String(v[1]), day: String(v[2]), data };
+  }).filter(d => d.id && d.data);
+}
+// Save one doc. Pass `rows` when saving many at once so the sheet is read only once.
+function liftPut_(id, data, rows) {
+  id = String(id || '');
+  if (!/^[\w-]{1,80}$/.test(id)) throw err_('Bad item name.');
+  if (!data || typeof data !== 'object' || Array.isArray(data)) throw err_('Bad item.');
+  const json = JSON.stringify(data);
+  if (json.length > MAX_DOC) throw err_('That entry is too big to save.');
+  const kind = id === 'profile' ? 'profile' : String(data.kind || '');
+  let day = '';
+  if (kind === 'workout' && data.startedAt) day = Utilities.formatDate(new Date(toMs_(data.startedAt)), Session.getScriptTimeZone(), 'yyyy-MM-dd');
+  else if (kind === 'diet' || kind === 'miss') day = String(data.day || '');
+  const row = [id, kind, day, json, iso_(Date.now())];
+  const sh = liftSheet_();
+  const list = rows || liftAll_();
+  const found = list.find(d => d.id === id);
+  if (found) sh.getRange(found._row, 1, 1, LIFT_COLS.length).setValues([row]);
+  else { sh.appendRow(row); if (rows) rows.push({ _row: sh.getLastRow(), id, kind, day, data }); }
+}
+// Which weekdays are workout days, and which days have a finished workout.
+function workoutState_() {
+  const all = liftAll_();
+  const prof = (all.find(d => d.id === 'profile') || {}).data || {};
+  const plan = Array.isArray(prof.plan) ? prof.plan.map(Number) : [];
+  const since = String(prof.planSince || '');
+  const doneDays = {}, reasons = {};
+  all.forEach(d => {
+    if (d.kind === 'workout' && d.data.finishedAt && d.day) doneDays[d.day] = true;
+    if (d.kind === 'miss') reasons[d.day] = d.data.reason || '';
+  });
+  const isPlanDay = day => !!since && day >= since && plan.indexOf(dow_(day)) >= 0;
+  return { plan, since, doneDays, reasons, isPlanDay };
+}
+// Workout days in the last `n` days (not today) with no finished workout.
+function workoutMisses_(n) {
+  const w = workoutState_(), out = [], tz = Session.getScriptTimeZone();
+  const p = Utilities.formatDate(new Date(), tz, 'yyyy-MM-dd').split('-').map(Number);
+  for (let i = n; i >= 1; i--) {
+    const day = Utilities.formatDate(new Date(Date.UTC(p[0], p[1] - 1, p[2] - i, 12)), 'UTC', 'yyyy-MM-dd');
+    if (w.isPlanDay(day) && !w.doneDays[day]) out.push({ day, reason: w.reasons[day] || '' });
+  }
+  return out;
+}
+// 0 = Sunday, matching the Workouts page
+function dow_(day) { const p = day.split('-').map(Number); return new Date(Date.UTC(p[0], p[1] - 1, p[2])).getUTCDay(); }
+function dayName_(day) { const p = day.split('-').map(Number); return Utilities.formatDate(new Date(Date.UTC(p[0], p[1] - 1, p[2], 12)), 'UTC', 'EEEE, MMM d'); }
 
 // ---------- helpers ----------
 function signedIn_(b) {

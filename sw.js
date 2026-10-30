@@ -1,6 +1,6 @@
 // Lets Goal Log install on a phone or computer, open without a connection, and show notifications.
-const CACHE = "goal-log-v1";
-const SHELL = ["./", "index.html", "config.js", "parse.js", "manifest.webmanifest", "img/icon-192.png", "img/icon-512.png"];
+const CACHE = "goal-log-v2";
+const SHELL = ["./", "index.html", "workouts.html", "config.js", "parse.js", "manifest.webmanifest", "img/icon-192.png", "img/icon-512.png"];
 
 self.addEventListener("install", (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()));

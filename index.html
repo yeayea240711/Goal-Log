@@ -42,6 +42,7 @@ body {
 header.top { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; grid-column: 1 / -1; }
 h1 { font-family: var(--display); font-weight: 800; font-size: 30px; letter-spacing: -0.02em; margin: 0; }
 h1 span { color: var(--accent); }
+.navlink { font-weight: 600; font-size: 14px; color: var(--accent); text-decoration: none; padding: 6px 2px; }
 .clock { font-family: var(--mono); font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; }
 h2 { font-family: var(--display); font-weight: 600; font-size: 17px; margin: 0; text-wrap: balance; }
 .label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); font-weight: 600; }
@@ -50,12 +51,12 @@ h2 { font-family: var(--display); font-weight: 600; font-size: 17px; margin: 0; 
 .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
 .hint, .note, .status { font-size: 13px; color: var(--muted); margin: 0; }
 .err { color: var(--miss); font-size: 14px; }
-button { font: inherit; font-weight: 600; border-radius: 9px; border: 1px solid var(--line); background: var(--surface); color: var(--ink); padding: 9px 14px; cursor: pointer; }
+button, a.btn { font: inherit; text-decoration: none; display: inline-block; font-weight: 600; border-radius: 9px; border: 1px solid var(--line); background: var(--surface); color: var(--ink); padding: 9px 14px; cursor: pointer; }
 button:hover { border-color: var(--muted); }
 button:focus-visible, textarea:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
 button.danger { color: var(--miss); }
-button.small { padding: 5px 10px; font-size: 13px; }
+button.small, a.btn.small { padding: 5px 10px; font-size: 13px; }
 button:disabled { opacity: 0.55; cursor: default; }
 input, select, textarea { font: inherit; color: var(--ink); background: var(--sunk); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; width: 100%; min-width: 0; }
 
@@ -149,6 +150,7 @@ input, select, textarea { font: inherit; color: var(--ink); background: var(--su
   <header class="top">
     <h1>Goal<span>Log</span></h1>
     <div class="row">
+      <a class="navlink" href="workouts.html">Workouts</a>
       <span class="clock" id="clock"></span>
       <button class="small" id="signout" hidden>Sign out</button>
     </div>
@@ -279,6 +281,7 @@ const store = {
 };
 
 let tasks = [];            // {id, title, start_at, nag_at, every, level, status, reason}
+let workoutMisses = [];   // {day, reason}: workout days with no finished workout, from the Workouts page
 let passcode = "";
 let viewMonth = new Date(); viewMonth.setDate(1);
 let selectedDay = null;
@@ -327,14 +330,18 @@ const api = DEMO ? {
     demo.put(list); return { data: t, error: null };
   },
   remove: async (id) => { demo.put(demo.all().filter((x) => x.id !== id)); return { data: { ok: true }, error: null }; },
-  testEmail: async () => ({ data: null, error: { message: "Emails need the Google script. Follow the README to connect it." } })
+  testEmail: async () => ({ data: null, error: { message: "Emails need the Google script. Follow the README to connect it." } }),
+  workoutMisses: async () => ({ data: [], error: null }),
+  workoutReason: async () => ({ data: { ok: true }, error: null })
 } : {
   check: () => gs("check", {}),
   list: () => gs("list", {}),
   save: (t) => gs("save", { task: t }),
   status: (id, status, reason) => gs("status", { id, status, reason }),
   remove: (id) => gs("remove", { id }),
-  testEmail: () => gs("test_email", {})
+  testEmail: () => gs("test_email", {}),
+  workoutMisses: () => gs("workout_misses", {}),
+  workoutReason: (day, reason) => gs("workout_reason", { day, reason })
 };
 
 // ---------- date helpers ----------
@@ -415,6 +422,8 @@ async function refresh() {
     $("store-status").textContent = error.message; return;
   }
   tasks = data || [];
+  const wm = await api.workoutMisses();
+  workoutMisses = wm.error ? [] : wm.data || [];
   $("store-status").textContent = DEMO ? "" : "Synced " + fmtTime(new Date()) + ".";
   render(); checkReminders();
 }
@@ -510,6 +519,19 @@ function askRow(t) {
     </div>
   </div>`;
 }
+// a workout day with no finished workout, from the Workouts page
+function workoutAskRow(m) {
+  const d = new Date(m.day + "T12:00");
+  return `<div class="ev" data-id="wk-${esc(m.day)}" data-wday="${esc(m.day)}"><div class="time"><b>Workout</b>${esc(fmtDay(d))}</div>
+    <div><div class="title">Workout day</div><div class="meta">No workout was finished that day.</div></div>
+    <div class="acts"><a class="small btn" href="workouts.html">Log it</a><button class="small danger" data-act="miss">Missed it</button></div>
+    <div class="ask" data-ask hidden>
+      <label class="label" for="why-wk-${esc(m.day)}">Why didn't it happen?</label>
+      <input id="why-wk-${esc(m.day)}" type="text" maxlength="500" placeholder="Sore, worked late, skipped it…">
+      <div class="row"><button class="small primary" data-act="save-miss">Mark it missed</button><button class="small" data-act="cancel-miss">Cancel</button></div>
+    </div>
+  </div>`;
+}
 function pastRow(t) {
   const d = parse(t.start_at), missed = t.status === "missed";
   return `<div class="ev" data-id="${esc(t.id)}">${timeCell(d)}
@@ -524,8 +546,9 @@ function render() {
   const inDay = (t) => !selectedDay || dayKey(parse(t.start_at)) === selectedDay;
 
   const needAnswer = sorted.filter((t) => t.status === "open" && parse(t.start_at) <= now);
-  $("answer-panel").hidden = needAnswer.length === 0;
-  $("answer-list").innerHTML = needAnswer.map(askRow).join("");
+  const wkAsk = workoutMisses.filter((m) => !m.reason);
+  $("answer-panel").hidden = needAnswer.length + wkAsk.length === 0;
+  $("answer-list").innerHTML = needAnswer.map(askRow).join("") + wkAsk.map(workoutAskRow).join("");
 
   const up = sorted.filter((t) => t.status === "open" && parse(t.start_at) > now && inDay(t));
   $("up-list").innerHTML = up.length ? up.map(upRow).join("")
@@ -538,9 +561,10 @@ function render() {
 
   const week = sorted.filter((t) => parse(t.start_at) >= now - 7 * DAY && parse(t.start_at) <= now);
   $("s-done").textContent = week.filter((t) => t.status === "done").length;
-  $("s-miss").textContent = week.filter((t) => t.status === "missed").length;
-  $("s-open").textContent = needAnswer.length;
-  const whys = week.filter((t) => t.status === "missed");
+  $("s-miss").textContent = week.filter((t) => t.status === "missed").length + workoutMisses.length;
+  $("s-open").textContent = needAnswer.length + wkAsk.length;
+  const whys = week.filter((t) => t.status === "missed").map((t) => ({ title: t.title, reason: t.reason }))
+    .concat(workoutMisses.filter((m) => m.reason).map((m) => ({ title: "Workout, " + fmtDay(new Date(m.day + "T12:00")), reason: m.reason })));
   $("whys").innerHTML = whys.length ? whys.map((t) => `<div><b>${esc(t.title)}</b>: ${esc(t.reason || "No reason given")}</div>`).join("")
     : `<div class="empty" style="border:0;padding:0">No misses this week.</div>`;
   renderMonth();
@@ -574,6 +598,12 @@ document.addEventListener("click", async (e) => {
   if (act === "edit" && t) return openForm(t);
   if (act === "miss") { row.querySelector("[data-ask]").hidden = false; row.querySelector("input").focus(); return; }
   if (act === "cancel-miss") { row.querySelector("[data-ask]").hidden = true; return; }
+  if (act === "save-miss" && row.dataset.wday) {
+    b.disabled = true;
+    const res = await api.workoutReason(row.dataset.wday, row.querySelector("input").value.trim() || "No reason given");
+    if (res.error) { b.disabled = false; $("store-status").textContent = "That change didn't save: " + res.error.message; return; }
+    return refresh();
+  }
   if (act === "delete" && b.dataset.sure !== "1") { b.dataset.sure = "1"; b.textContent = "Tap again to delete"; return; }
   b.disabled = true;
   let res;

@@ -11,12 +11,14 @@ A personal accountability calendar. Say what you need to do, and Goal Log keeps 
 - **Did you do it?** An hour after a task's time, you get an email. Open Goal Log, mark it done, or mark it missed and say why.
 - **Pop-ups.** While Goal Log is open in a tab or installed as an app, you also get a notification on that device.
 - **Last 7 days.** A scorecard of done, missed and waiting, with your reasons for each miss.
+- **Workouts.** Lift Log lives inside Goal Log: workouts, sets, rest timer, diet, body weight and progress charts, all saved to the same Google Sheet (in a tab called **Lift**). On your workout days you get emails at 5, 7 and 9 PM until you finish a workout, and a skipped workout day shows up under "Did you do these?" so you can say why.
 
 ## What's here
 
 | File | What it is |
 | --- | --- |
 | `index.html` | The app. Sign in with your passcode, add tasks, see your calendar. |
+| `workouts.html` | Workouts (Lift Log). To bring in your old Lift Log, open **Progress → Bring in your old Lift Log** and pick your `lift-log-import.json` file. |
 | `parse.js` | Reads dates and reminder times out of what you type. |
 | `google/Code.gs` | The Google script. It saves tasks to your Google Sheet and sends the reminder emails. |
 | `config.js` | Holds the link to your Google script. While it's empty the app runs in demo mode: tasks stay in that browser and no emails go out. |
@@ -52,5 +54,6 @@ If you change `Code.gs` later, use **Deploy → Manage deployments → Edit → 
 | `SITE_URL` | Your Goal Log link, used for the button in emails. |
 | `MORNING_HOUR` | Hour for the morning plan email (0 to 23). `-1` turns it off. |
 | `ASK_AFTER_MIN` | How long after a task's time you get the "did you do it?" email. |
+| `WORKOUT_HOURS` | Hours (0 to 23) for workout-day reminder emails. Pick your workout days on the Workouts page under History. |
 
 Gmail lets a free Google account send about 100 script emails a day, which covers several hourly reminders a day with room to spare.

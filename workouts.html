@@ -783,6 +783,7 @@ function workoutView(id, w) {
   </section>
   <section class="card">
     <button class="primary block" data-act="finish">Finish workout</button>
+    ${st.done && st.done < st.total ? `<button class="block" data-act="finish-incomplete">Finish incomplete: save the ${st.done} set${st.done === 1 ? "" : "s"} I did</button>` : ""}
     <div class="row between">
       <button data-act="save-routine">Save as routine</button>
       ${confirmBtn("discard", "Discard workout", "discard")}
@@ -854,7 +855,7 @@ function historyView() {
     if (m !== month) { month = m; h += `<div class="label" style="margin-top:6px">${m}</div>`; }
     const st = workoutStats(w); const open = S.open === id;
     h += `<section class="card hist-item" data-act="hist-open" data-id="${id}">
-      <div class="row between"><div><h3>${esc(w.name)}</h3><div class="muted small">${fmtDate(w.startedAt)} · ${fmtTime(w.startedAt)}</div></div><span class="muted" aria-hidden="true">${open ? "▴" : "▾"}</span></div>
+      <div class="row between"><div><h3>${esc(w.name)}${w.incomplete ? ` <span class="upnext" style="color:var(--hot)">Incomplete</span>` : ""}</h3><div class="muted small">${fmtDate(w.startedAt)} · ${fmtTime(w.startedAt)}</div></div><span class="muted" aria-hidden="true">${open ? "▴" : "▾"}</span></div>
       <div class="stats"><div class="stat"><b>${st.done}</b><span>Sets</span></div>${st.strength ? `<div class="stat"><b>${Math.round(st.vol).toLocaleString()}</b><span>Volume ${U()}</span></div>` : ""}${st.cardio ? `<div class="stat"><b>${fmtNum(st.cmin)}</b><span>Cardio min</span></div>${st.cdist ? `<div class="stat"><b>${fmtNum(st.cdist)}</b><span>${DU()}</span></div>` : ""}` : ""}<div class="stat"><b>${st.mins}</b><span>Minutes</span></div></div>
       ${open ? `<div class="detail">${w.exercises.map((e) => `<div><span>${esc(e.name)}</span><span>${e.sets.filter((s) => s.done).map((s) => isCardio(e) ? cardioTxt(s, w.unit) : `${disp(s.w, w.unit)}×${s.r || "–"}`).join(", ") || "no sets done"}</span></div>`).join("")}</div>
       <div class="row"><button class="primary" data-act="resume" data-id="${id}">Reopen workout</button><button data-act="repeat" data-id="${id}">Start fresh copy</button>${confirmBtn("hd-" + id, "Delete", "hist-del", `data-id="${id}"`)}</div>` : ""}
@@ -1519,11 +1520,15 @@ document.addEventListener("click", (ev) => {
     }
     case "rm-set": w.exercises[d.e].sets.pop(); store.save(wid); render(); break;
     case "rm-ex": w.exercises.splice(Number(d.e), 1); store.save(wid); render(); break;
+    case "finish-incomplete":
     case "finish": {
       const st = workoutStats(w);
       if (!st.done) { toast("Check off at least one set, or discard this workout."); break; }
-      w.finishedAt = w.past ? new Date(new Date(w.startedAt).getTime() + (Number(w.dur) || 60) * 60000).toISOString() : new Date().toISOString(); S.rest = null; tickRest();
-      store.save(wid); toast("Saved: " + [st.strength ? `${Math.round(st.vol).toLocaleString()} ${U()} lifted` : "", st.cardio ? `${fmtNum(st.cmin)} min cardio` : ""].filter(Boolean).join(", ") + ".");
+      // left open from an earlier day: end it an hour after it started, not now
+      const stale = !w.past && dayKey(new Date(w.startedAt)) < dayKey();
+      w.finishedAt = w.past || stale ? new Date(new Date(w.startedAt).getTime() + (Number(w.dur) || 60) * 60000).toISOString() : new Date().toISOString(); S.rest = null; tickRest();
+      if (act === "finish-incomplete" || st.done < st.total) w.incomplete = true; else delete w.incomplete;
+      store.save(wid); toast((w.incomplete ? "Saved as incomplete: " : "Saved: ") + [st.strength ? `${Math.round(st.vol).toLocaleString()} ${U()} lifted` : "", st.cardio ? `${fmtNum(st.cmin)} min cardio` : ""].filter(Boolean).join(", ") + ".");
       render(); window.scrollTo(0, 0); break;
     }
     case "discard": S.rest = null; tickRest(); store.remove(wid); render(); break;

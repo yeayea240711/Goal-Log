@@ -126,6 +126,16 @@ input, select, textarea { font: inherit; color: var(--ink); background: var(--su
 .score div { background: var(--sunk); border-radius: 10px; padding: 10px; }
 .score b { display: block; font-family: var(--display); font-size: 24px; font-variant-numeric: tabular-nums; }
 .score .d b { color: var(--done); } .score .m b { color: var(--miss); } .score .o b { color: var(--nag); }
+.habits { display: grid; gap: 14px; }
+.habit .top { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; flex-wrap: wrap; font-size: 14px; }
+.habit .top b { font-size: 15px; }
+.habit .nums { color: var(--muted); font-size: 13px; }
+.habit .nums .m { color: var(--miss); font-weight: 700; }
+.habit .nums .d { color: var(--done); font-weight: 700; }
+.strip { display: grid; grid-template-columns: repeat(14, 1fr); gap: 3px; margin-top: 6px; }
+.strip i { aspect-ratio: 1; border-radius: 4px; background: var(--sunk); display: grid; place-items: center; font-style: normal; font-size: 10px; font-weight: 700; color: #fff; }
+.strip i.done { background: var(--done); }
+.strip i.missed { background: var(--miss); }
 .whys { display: grid; gap: 6px; font-size: 14px; }
 .whys div { border-left: 3px solid var(--miss); padding-left: 8px; }
 .demo { background: var(--nag-soft); border: 1px solid var(--nag); border-radius: 12px; padding: 10px 14px; font-size: 14px; grid-column: 1 / -1; }
@@ -237,6 +247,11 @@ input, select, textarea { font: inherit; color: var(--ink); background: var(--su
         <button class="small" id="next" aria-label="Next month">&#8250;</button>
       </div>
       <div class="grid" id="grid"></div>
+    </section>
+
+    <section class="panel" id="habits-panel" hidden aria-labelledby="habits-h">
+      <h2 id="habits-h">Every day</h2>
+      <div class="habits" id="habits"></div>
     </section>
 
     <section class="panel" aria-labelledby="check-h">
@@ -545,7 +560,12 @@ function pastRow(t) {
   const d = parse(t.start_at), missed = t.status === "missed";
   return `<div class="ev" data-id="${esc(t.id)}">${timeCell(d)}
     <div><div class="title">${esc(t.title)}${pill(t)}</div>${missed ? `<div class="reason">Why: ${esc(t.reason || "No reason given")}</div>` : ""}</div>
-    <div class="acts"><span class="mark ${missed ? "missed" : "done"}" aria-label="${missed ? "Missed" : "Done"}">${missed ? "✕" : "✓"}</span><button class="small" data-act="reopen">Undo</button></div>
+    <div class="acts"><span class="mark ${missed ? "missed" : "done"}" aria-label="${missed ? "Missed" : "Done"}">${missed ? "✕" : "✓"}</span>${missed ? `<button class="small" data-act="miss">Say why</button>` : ""}<button class="small" data-act="reopen">Undo</button></div>
+    ${missed ? `<div class="ask" data-ask hidden>
+      <label class="label" for="why-${esc(t.id)}">Why didn't it happen?</label>
+      <input id="why-${esc(t.id)}" type="text" maxlength="500" placeholder="Overslept, forgot, ran out of time…">
+      <div class="row"><button class="small primary" data-act="save-miss">Save</button><button class="small" data-act="cancel-miss">Cancel</button></div>
+    </div>` : ""}
   </div>`;
 }
 
@@ -576,7 +596,30 @@ function render() {
     .concat(workoutMisses.filter((m) => m.reason).map((m) => ({ title: "Workout, " + fmtDay(new Date(m.day + "T12:00")), reason: m.reason })));
   $("whys").innerHTML = whys.length ? whys.map((t) => `<div><b>${esc(t.title)}</b>: ${esc(t.reason || "No reason given")}</div>`).join("")
     : `<div class="empty" style="border:0;padding:0">No misses this week.</div>`;
+  renderHabits();
   renderMonth();
+}
+// Daily tasks: how many done and missed in the last 30 days, and the last 14 days as ✓/✕ squares.
+function renderHabits() {
+  const now = Date.now(), byTitle = {};
+  tasks.filter((t) => t.repeat === "daily" && parse(t.start_at)).forEach((t) => (byTitle[t.title] ||= []).push(t));
+  const titles = Object.keys(byTitle);
+  $("habits-panel").hidden = !titles.length;
+  if (!titles.length) return;
+  $("habits").innerHTML = titles.map((title) => {
+    const list = byTitle[title], byDay = {};
+    list.forEach((t) => { byDay[dayKey(parse(t.start_at))] = t; });
+    const month = list.filter((t) => parse(t.start_at) >= now - 30 * DAY && parse(t.start_at) <= now);
+    const nDone = month.filter((t) => t.status === "done").length, nMiss = month.filter((t) => t.status === "missed").length;
+    let streak = 0;
+    for (const t of [...list].sort((a, b) => parse(b.start_at) - parse(a.start_at))) { if (t.status === "open") continue; if (t.status !== "done") break; streak++; }
+    const cells = [];
+    for (let i = 13; i >= 0; i--) {
+      const d = new Date(now - i * DAY), t = byDay[dayKey(d)], st = t ? t.status : "";
+      cells.push(`<i class="${st}" title="${esc(fmtDay(d))}: ${st || "nothing"}">${st === "done" ? "✓" : st === "missed" ? "✕" : ""}</i>`);
+    }
+    return `<div class="habit"><div class="top"><b>${esc(title)}</b><span class="nums">Last 30 days: <span class="d">${nDone} done</span> · <span class="m">${nMiss} missed</span>${streak > 1 ? ` · ${streak} in a row` : ""}</span></div><div class="strip" aria-label="Last 14 days">${cells.join("")}</div></div>`;
+  }).join("");
 }
 function renderMonth() {
   const y = viewMonth.getFullYear(), m = viewMonth.getMonth();

@@ -28,6 +28,7 @@ const DAILY_TASKS = [
   { title: 'Read scripture', at: '21:00', remindFrom: '17:00', every: 120 },
   { title: 'Workout', at: '21:00', remindFrom: '17:00', every: 120, workout: true }
 ];
+const MISSED_BY_MIDNIGHT = 'Not done by the end of the day';
 const WORKOUT_TASK = DAILY_TASKS.filter(d => d.workout).map(d => d.title)[0] || '';
 
 const SHEET_NAME = 'Tasks';
@@ -186,7 +187,6 @@ function checkReminders() {
 
 // Make sure today's built-in daily tasks exist, and check off the workout one once a workout is finished.
 function dailyTasks_(now) {
-  if (!DAILY_TASKS.length) return;
   const tz = Session.getScriptTimeZone(), today = Utilities.formatDate(new Date(now), tz, 'yyyy-MM-dd');
   const day = r => Utilities.formatDate(new Date(toMs_(r.start_at)), tz, 'yyyy-MM-dd');
   const all = readAll_();
@@ -197,11 +197,12 @@ function dailyTasks_(now) {
       start_at: iso_(start), nag_at: nag && nag < start ? iso_(nag) : '', last_emailed: '', asked: '', next_made: '', created: stamp, updated: stamp };
     save_(r); all.push(r);
   });
-  if (!WORKOUT_TASK) return;
-  const done = workoutState_().doneDays;
+  const done = WORKOUT_TASK ? workoutState_().doneDays : {};
   all.forEach(r => {
-    if (r.title !== WORKOUT_TASK || r.status !== 'open' || !done[day(r)]) return;
-    r.status = 'done'; r.updated = iso_(now); save_(r);
+    if (r.status !== 'open') return;
+    if (r.title === WORKOUT_TASK && done[day(r)]) { r.status = 'done'; r.updated = iso_(now); save_(r); return; }
+    // a daily task that wasn't checked off by midnight counts as missed; the next day's one is already waiting
+    if (r.repeat === 'daily' && day(r) < today) { r.status = 'missed'; r.reason = r.reason || MISSED_BY_MIDNIGHT; r.updated = iso_(now); save_(r); }
   });
 }
 // A clock time ("21:00") on a day ("2026-11-08") in the script's time zone, as milliseconds.
@@ -269,8 +270,11 @@ function morningPlan() {
   const workoutToday = !WORKOUT_TASK && w.isPlanDay(today) && !w.doneDays[today];
   const upNext = r => r.title === WORKOUT_TASK && w.next ? ' (up next: ' + esc_(w.next) + ')' : '';
   const skipped = workoutMisses_(7).filter(m => !m.reason);
-  if (!todays.length && !waiting.length && !workoutToday && !skipped.length) return;
+  const p = today.split('-').map(Number), yesterday = Utilities.formatDate(new Date(Date.UTC(p[0], p[1] - 1, p[2] - 1, 12)), 'UTC', 'yyyy-MM-dd');
+  const missedYesterday = all.filter(r => r.repeat === 'daily' && r.status === 'missed' && Utilities.formatDate(new Date(toMs_(r.start_at)), tz, 'yyyy-MM-dd') === yesterday);
+  if (!todays.length && !waiting.length && !workoutToday && !skipped.length && !missedYesterday.length) return;
   let html = '';
+  if (missedYesterday.length) html += '<p style="margin:0 0 14px;color:#b13a2d"><b>✕ Missed yesterday:</b> ' + missedYesterday.map(r => esc_(r.title)).join(', ') + '. Today is a new day.</p>';
   if (workoutToday) html += '<p style="font-size:16px;margin:0 0 12px">🏋️ <b>Workout day today.</b>' + (w.next ? ' Up next: ' + esc_(w.next) + '.' : '') + '</p>';
   if (todays.length) html += '<h3 style="margin:0 0 8px">Today</h3><ul>' + todays.map(r => '<li><b>' + time_(r.start_at) + '</b> ' + esc_(r.title) + upNext(r) + (r.level === 'cantmiss' ? ' <span style="color:#b13a2d">(can\'t miss)</span>' : '') + '</li>').join('') + '</ul>';
   if (waiting.length) html += '<h3 style="margin:16px 0 8px">Still waiting on an answer</h3><ul>' + waiting.map(r => '<li>' + esc_(r.title) + ' (' + when_(r.start_at) + ')</li>').join('') + '</ul>';

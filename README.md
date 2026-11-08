@@ -10,6 +10,7 @@ A personal accountability calendar. Say what you need to do, and Goal Log keeps 
 - **Morning plan.** At 7 AM you get an email with today's tasks and anything still waiting on an answer.
 - **Did you do it?** An hour after a task's time, you get an email. Open Goal Log, mark it done, or mark it missed and say why.
 - **Pop-ups.** While Goal Log is open in a tab or installed as an app, you also get a notification on that device.
+- **Every day.** "Read scripture" and "Workout" are added for you each day, due by 9 PM, with reminders from 5 PM. Workout checks itself off when you finish a workout, and names the routine that's up next. Your routines take turns. You can also make any task repeat daily ("Stretch every day at 7am"). Change the daily list with `DAILY_TASKS` in `Code.gs`.
 - **Last 7 days.** A scorecard of done, missed and waiting, with your reasons for each miss.
 - **Workouts.** Lift Log lives inside Goal Log: workouts, sets, rest timer, diet, body weight and progress charts, all saved to the same Google Sheet (in a tab called **Lift**). On your workout days you get emails at 5, 7 and 9 PM until you finish a workout, and a skipped workout day shows up under "Did you do these?" so you can say why.
 

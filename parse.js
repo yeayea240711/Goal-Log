@@ -1,8 +1,9 @@
 // Turns "Interview Oct 27 at 7am, start reminding me Oct 26 at 7pm, every hour"
-// into { title, start, nagStart, every, level }. Dates come back as Date objects.
+// into { title, start, nagStart, every, level, repeat }. Dates come back as Date objects.
 // `chrono` is the chrono-node library, passed in so this file has no imports.
 
 const MUST = /\b(can'?t miss|cannot miss|must|important|urgent|interview|appointment|deadline|exam|test|court|flight)\b/i;
+const DAILY = /\b(every\s*day|everyday|each\s+day|daily)\b/i;
 const REMIND = /(remind(ing)?( me)?|reminders?|nag( me)?|start)\W*(\w+\W+){0,2}$/i;
 
 export function everyFromText(text) {
@@ -19,7 +20,7 @@ export function everyFromText(text) {
 export function parseRequest(text, now, chrono) {
   // "every 2 hours" is a repeat, not a date
   const results = chrono.parse(text, now, { forwardDate: true })
-    .filter((r) => !/every\s*$/i.test(text.slice(0, r.index)));
+    .filter((r) => !/(every|each)\s*$/i.test(text.slice(0, r.index)) && !DAILY.test(r.text));
   let event = null, nag = null;
   for (const r of results) {
     const before = text.slice(Math.max(0, r.index - 30), r.index);
@@ -58,7 +59,7 @@ export function parseRequest(text, now, chrono) {
   if (start && !nagStart) nagStart = new Date(start - (level === "cantmiss" ? 12 : 4) * 3600000);
 
   // Title: what's left after removing the dates and reminder talk
-  let title = text;
+  let title = text.replace(DAILY, " ");
   for (const r of results) title = title.replace(r.text, " ");
   title = title
     .replace(/\b(start\s+)?remind(ing)?\s+me\b/gi, " ")
@@ -74,5 +75,5 @@ export function parseRequest(text, now, chrono) {
   title = title.replace(/\s+\b(at|on|by|from|and|every)$/i, "").replace(/^(an?|the)\s+/i, "").trim();
   if (title) title = title[0].toUpperCase() + title.slice(1);
 
-  return { title: title || text.trim(), start, nagStart, every, level };
+  return { title: title || text.trim(), start, nagStart, every, level, repeat: DAILY.test(text) ? "daily" : "" };
 }

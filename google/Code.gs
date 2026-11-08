@@ -21,10 +21,18 @@ const SITE_URL = 'https://yeayea240711.github.io/Goal-Log/';
 const MORNING_HOUR = 7;      // the "today's plan" email, in the script's time zone. Set to -1 to turn it off.
 const ASK_AFTER_MIN = 60;    // this long after a task's time, you get a "did you do it?" email
 const WORKOUT_HOURS = [17, 19, 21];  // on a workout day with no finished workout, you get an email at these hours
+// Tasks that are added for you every day, due by `at` (24-hour clock), with reminders from `remindFrom` every `every` minutes.
+// The one marked workout: true checks itself off when you finish a workout on the Workouts page,
+// and replaces the separate workout-day emails above.
+const DAILY_TASKS = [
+  { title: 'Read scripture', at: '21:00', remindFrom: '17:00', every: 120 },
+  { title: 'Workout', at: '21:00', remindFrom: '17:00', every: 120, workout: true }
+];
+const WORKOUT_TASK = DAILY_TASKS.filter(d => d.workout).map(d => d.title)[0] || '';
 
 const SHEET_NAME = 'Tasks';
 const COLS = ['When', 'Task', 'Level', 'Status', 'Why missed', 'Remind from', 'Every (min)',
-  'id', 'start_at', 'nag_at', 'last_emailed', 'asked', 'Created', 'Updated'];
+  'id', 'start_at', 'nag_at', 'last_emailed', 'asked', 'Created', 'Updated', 'Repeat', 'next_made'];
 const LEVELS = ['light', 'normal', 'cantmiss'];
 const LIFT_SHEET = 'Lift';   // the workout log: one row per workout, diet day, or your settings
 const LIFT_COLS = ['id', 'kind', 'day', 'json', 'updated'];
@@ -51,7 +59,7 @@ function doPost(e) {
 const ACTIONS = {
   check: () => ({ ok: true, email: to_() }),
 
-  list: () => readAll_().map(public_),
+  list: () => { dailyTasks_(Date.now()); return readAll_().map(public_); },
 
   save: b => {
     const t = b.task || {};
@@ -62,15 +70,16 @@ const ACTIONS = {
     const nag = t.nag_at ? toMs_(t.nag_at) : null;
     const every = Math.max(0, Math.min(1440, Number(t.every) || 0));
     const level = LEVELS.indexOf(t.level) >= 0 ? t.level : 'normal';
+    const repeat = t.repeat === 'daily' ? 'daily' : '';
     const now = iso_(Date.now());
     let r = t.id ? readAll_().find(x => x.id === t.id) : null;
     if (t.id && !r) throw err_('That task was deleted.');
-    if (!r) r = { id: Utilities.getUuid(), status: 'open', reason: '', last_emailed: '', asked: '', created: now };
+    if (!r) r = { id: Utilities.getUuid(), status: 'open', reason: '', last_emailed: '', asked: '', next_made: '', created: now };
     // a new time means the reminders start over
     if (r.start_at !== iso_(start) || String(r.nag_at || '') !== (nag ? iso_(nag) : '') || Number(r.every) !== every) {
       r.last_emailed = ''; r.asked = '';
     }
-    Object.assign(r, { title, start_at: iso_(start), nag_at: nag ? iso_(nag) : '', every, level, updated: now });
+    Object.assign(r, { title, start_at: iso_(start), nag_at: nag ? iso_(nag) : '', every, level, repeat, updated: now });
     save_(r);
     return public_(r);
   },
@@ -95,7 +104,7 @@ const ACTIONS = {
   // ---------- workouts (the Workouts page) ----------
   lift_list: () => liftAll_().filter(d => d.kind !== 'miss').map(d => ({ id: d.id, data: d.data })),
 
-  lift_put: b => { liftPut_(b.id, b.data); return { ok: true }; },
+  lift_put: b => { liftPut_(b.id, b.data); if (b.data && b.data.finishedAt) dailyTasks_(Date.now()); return { ok: true }; },
 
   lift_del: b => {
     const d = liftAll_().find(x => x.id === b.id);
@@ -145,6 +154,8 @@ function setup() {
 function checkReminders() {
   withLock_(() => {
     const now = Date.now();
+    repeatTasks_(now);
+    dailyTasks_(now);
     readAll_().forEach(r => {
       if (r.status !== 'open') return;
       const start = toMs_(r.start_at);
@@ -173,8 +184,60 @@ function checkReminders() {
   });
 }
 
+// Make sure today's built-in daily tasks exist, and check off the workout one once a workout is finished.
+function dailyTasks_(now) {
+  if (!DAILY_TASKS.length) return;
+  const tz = Session.getScriptTimeZone(), today = Utilities.formatDate(new Date(now), tz, 'yyyy-MM-dd');
+  const day = r => Utilities.formatDate(new Date(toMs_(r.start_at)), tz, 'yyyy-MM-dd');
+  const all = readAll_();
+  DAILY_TASKS.forEach(d => {
+    if (all.some(r => r.title === d.title && day(r) >= today)) return;
+    const start = atLocal_(today, d.at), nag = d.remindFrom ? atLocal_(today, d.remindFrom) : 0, stamp = iso_(now);
+    const r = { id: Utilities.getUuid(), title: d.title, level: 'normal', status: 'open', reason: '', every: d.every || 0, repeat: 'daily',
+      start_at: iso_(start), nag_at: nag && nag < start ? iso_(nag) : '', last_emailed: '', asked: '', next_made: '', created: stamp, updated: stamp };
+    save_(r); all.push(r);
+  });
+  if (!WORKOUT_TASK) return;
+  const done = workoutState_().doneDays;
+  all.forEach(r => {
+    if (r.title !== WORKOUT_TASK || r.status !== 'open' || !done[day(r)]) return;
+    r.status = 'done'; r.updated = iso_(now); save_(r);
+  });
+}
+// A clock time ("21:00") on a day ("2026-11-08") in the script's time zone, as milliseconds.
+function atLocal_(day, hhmm) {
+  const d = day.split('-').map(Number), t = hhmm.split(':').map(Number);
+  const guess = Date.UTC(d[0], d[1] - 1, d[2], t[0], t[1]);
+  const shown = Utilities.formatDate(new Date(guess), Session.getScriptTimeZone(), 'yyyy-MM-dd-HH-mm').split('-').map(Number);
+  return guess - (Date.UTC(shown[0], shown[1] - 1, shown[2], shown[3], shown[4]) - guess);
+}
+
+// Once a daily task's time arrives, add the next day's copy so it shows up and gets its own reminders.
+function repeatTasks_(now) {
+  readAll_().forEach(r => {
+    if (r.repeat !== 'daily' || r.next_made) return;
+    const start = toMs_(r.start_at);
+    if (!start || now < start) return;
+    let next = start, days = 0;
+    while (next <= now && days < 400) next = addDays_(start, ++days);
+    const nag = toMs_(r.nag_at), stamp = iso_(now);
+    save_({ id: Utilities.getUuid(), title: r.title, level: r.level, status: 'open', reason: '', every: r.every, repeat: 'daily',
+      start_at: iso_(next), nag_at: nag ? iso_(next - (start - nag)) : '', last_emailed: '', asked: '', next_made: '', created: stamp, updated: stamp });
+    r.next_made = stamp;
+    save_(r);
+  });
+}
+// The same clock time `n` days later, in the script's time zone (so daylight saving doesn't shift it).
+function addDays_(ms, n) {
+  const tz = Session.getScriptTimeZone(), mins = d => { const p = Utilities.formatDate(new Date(d), tz, 'H:mm').split(':'); return p[0] * 60 + Number(p[1]); };
+  let t = ms + n * 86400000, diff = mins(ms) - mins(t);
+  if (diff > 720) diff -= 1440; if (diff < -720) diff += 1440;
+  return t + diff * 60000;
+}
+
 // On a workout day, nag at WORKOUT_HOURS until a workout is finished.
 function workoutReminder_() {
+  if (WORKOUT_TASK) return;
   const tz = Session.getScriptTimeZone(), now = new Date();
   const today = Utilities.formatDate(now, tz, 'yyyy-MM-dd');
   const hour = Number(Utilities.formatDate(now, tz, 'H'));
@@ -188,7 +251,7 @@ function workoutReminder_() {
   const last = slot === WORKOUT_HOURS[WORKOUT_HOURS.length - 1];
   const site = SITE_URL + 'workouts.html';
   MailApp.sendEmail({ to: to_(), subject: (last ? '🔔 Last call: ' : '🏋️ ') + 'Workout day',
-    htmlBody: wrap_('<p style="font-size:18px;margin:0 0 6px"><b>Today is a workout day.</b></p><p style="margin:0">You haven\'t finished a workout yet.' +
+    htmlBody: wrap_('<p style="font-size:18px;margin:0 0 6px"><b>Today is a workout day.</b></p>' + (w.next ? '<p style="margin:0 0 6px">Up next: <b>' + esc_(w.next) + '</b></p>' : '') + '<p style="margin:0">You haven\'t finished a workout yet.' +
       (last ? ' This is the last reminder today.' : '') + '</p>' +
       '<p style="margin:18px 0 0"><a href="' + site + '" style="background:#1d6b57;color:#fff;padding:10px 16px;border-radius:8px;text-decoration:none;font-weight:600">Open Workouts</a></p>') });
 }
@@ -197,17 +260,19 @@ function workoutReminder_() {
 function morningPlan() {
   const tz = Session.getScriptTimeZone();
   const today = Utilities.formatDate(new Date(), tz, 'yyyy-MM-dd');
+  withLock_(() => dailyTasks_(Date.now()));
   const all = readAll_();
   const todays = all.filter(r => r.status === 'open' && Utilities.formatDate(new Date(toMs_(r.start_at)), tz, 'yyyy-MM-dd') === today)
     .sort((a, b) => toMs_(a.start_at) - toMs_(b.start_at));
   const waiting = all.filter(r => r.status === 'open' && toMs_(r.start_at) < Date.now() - ASK_AFTER_MIN * 60000);
   const w = workoutState_();
-  const workoutToday = w.isPlanDay(today) && !w.doneDays[today];
+  const workoutToday = !WORKOUT_TASK && w.isPlanDay(today) && !w.doneDays[today];
+  const upNext = r => r.title === WORKOUT_TASK && w.next ? ' (up next: ' + esc_(w.next) + ')' : '';
   const skipped = workoutMisses_(7).filter(m => !m.reason);
   if (!todays.length && !waiting.length && !workoutToday && !skipped.length) return;
   let html = '';
-  if (workoutToday) html += '<p style="font-size:16px;margin:0 0 12px">🏋️ <b>Workout day today.</b></p>';
-  if (todays.length) html += '<h3 style="margin:0 0 8px">Today</h3><ul>' + todays.map(r => '<li><b>' + time_(r.start_at) + '</b> ' + esc_(r.title) + (r.level === 'cantmiss' ? ' <span style="color:#b13a2d">(can\'t miss)</span>' : '') + '</li>').join('') + '</ul>';
+  if (workoutToday) html += '<p style="font-size:16px;margin:0 0 12px">🏋️ <b>Workout day today.</b>' + (w.next ? ' Up next: ' + esc_(w.next) + '.' : '') + '</p>';
+  if (todays.length) html += '<h3 style="margin:0 0 8px">Today</h3><ul>' + todays.map(r => '<li><b>' + time_(r.start_at) + '</b> ' + esc_(r.title) + upNext(r) + (r.level === 'cantmiss' ? ' <span style="color:#b13a2d">(can\'t miss)</span>' : '') + '</li>').join('') + '</ul>';
   if (waiting.length) html += '<h3 style="margin:16px 0 8px">Still waiting on an answer</h3><ul>' + waiting.map(r => '<li>' + esc_(r.title) + ' (' + when_(r.start_at) + ')</li>').join('') + '</ul>';
   if (skipped.length) html += '<h3 style="margin:16px 0 8px">Workouts you skipped</h3><ul>' + skipped.map(m => '<li>' + dayName_(m.day) + '</li>').join('') + '</ul><p style="margin:0">Say why in Goal Log.</p>';
   MailApp.sendEmail({ to: to_(), subject: 'Today: ' + (todays.length ? todays.length + ' task' + (todays.length > 1 ? 's' : '') : workoutToday ? 'workout day' : 'nothing scheduled') + (todays.length && workoutToday ? ' + workout' : ''), htmlBody: wrap_(html) });
@@ -230,14 +295,16 @@ function slots_(r) {
 function email_(kind, r) {
   const start = toMs_(r.start_at);
   const left = start - Date.now();
+  const next = r.title === WORKOUT_TASK ? workoutState_().next : '';
+  const extra = next ? '<p style="margin:6px 0 0">Up next: <b>' + esc_(next) + '</b></p>' : '';
   const subjects = {
     reminder: '⏰ ' + r.title + ' in ' + until_(left),
     now: '🔔 Now: ' + r.title,
     ask: 'Did you do it? ' + r.title
   };
   const bodies = {
-    reminder: '<p style="font-size:18px;margin:0 0 6px"><b>' + esc_(r.title) + '</b></p><p style="margin:0">' + when_(r.start_at) + ', in ' + until_(left) + '.</p>' + next_(r),
-    now: '<p style="font-size:18px;margin:0 0 6px"><b>' + esc_(r.title) + '</b></p><p style="margin:0">It\'s time. This was set for ' + time_(r.start_at) + '.</p>',
+    reminder: '<p style="font-size:18px;margin:0 0 6px"><b>' + esc_(r.title) + '</b></p><p style="margin:0">' + when_(r.start_at) + ', in ' + until_(left) + '.</p>' + extra + next_(r),
+    now: '<p style="font-size:18px;margin:0 0 6px"><b>' + esc_(r.title) + '</b></p><p style="margin:0">It\'s time. This was set for ' + time_(r.start_at) + '.</p>' + extra,
     ask: '<p style="font-size:18px;margin:0 0 6px"><b>' + esc_(r.title) + '</b></p><p style="margin:0 0 12px">This was due ' + when_(r.start_at) + '. Mark it done, or mark it missed and say why.</p>'
   };
   const button = '<p style="margin:18px 0 0"><a href="' + SITE_URL + '" style="background:#1d6b57;color:#fff;padding:10px 16px;border-radius:8px;text-decoration:none;font-weight:600">' + (kind === 'ask' ? 'Answer in Goal Log' : 'Open Goal Log') + '</a></p>';
@@ -262,6 +329,8 @@ function sheet_() {
     sh.getRange(1, 1, 1, COLS.length).setValues([COLS]).setFontWeight('bold');
     sh.setFrozenRows(1);
     sh.getRange(1, 1, sh.getMaxRows(), COLS.length).setNumberFormat('@');
+  } else if (sh.getRange(1, COLS.length).getValues()[0][0] !== COLS[COLS.length - 1]) {
+    sh.getRange(1, 1, 1, COLS.length).setValues([COLS]).setFontWeight('bold');
   }
   return sh;
 }
@@ -272,12 +341,13 @@ function readAll_() {
   return sh.getRange(2, 1, n, COLS.length).getValues().map((v, i) => ({
     _row: i + 2, title: String(v[1]), level: String(v[2]), status: String(v[3]), reason: String(v[4]),
     every: Number(v[6]) || 0, id: String(v[7]), start_at: String(v[8]), nag_at: String(v[9]),
-    last_emailed: String(v[10]), asked: String(v[11]), created: String(v[12]), updated: String(v[13])
+    last_emailed: String(v[10]), asked: String(v[11]), created: String(v[12]), updated: String(v[13]),
+    repeat: String(v[14] || ''), next_made: String(v[15] || '')
   })).filter(r => r.id);
 }
 function toRow_(r) {
   return [when_(r.start_at), r.title, r.level, r.status, r.reason, r.nag_at ? when_(r.nag_at) : '', r.every,
-    r.id, r.start_at, r.nag_at || '', r.last_emailed || '', r.asked || '', r.created, r.updated];
+    r.id, r.start_at, r.nag_at || '', r.last_emailed || '', r.asked || '', r.created, r.updated, r.repeat || '', r.next_made || ''];
 }
 function save_(r) {
   const sh = sheet_();
@@ -286,7 +356,7 @@ function save_(r) {
 }
 function public_(r) {
   return { id: r.id, title: r.title, start_at: r.start_at, nag_at: r.nag_at || null, every: r.every,
-    level: r.level, status: r.status, reason: r.reason };
+    level: r.level, status: r.status, reason: r.reason, repeat: r.repeat || '' };
 }
 
 // ---------- workout sheet ----------
@@ -341,10 +411,24 @@ function workoutState_() {
     if (d.kind === 'miss') reasons[d.day] = d.data.reason || '';
   });
   const isPlanDay = day => !!since && day >= since && plan.indexOf(dow_(day)) >= 0;
-  return { plan, since, doneDays, reasons, isPlanDay };
+  return { plan, since, doneDays, reasons, isPlanDay, next: nextRoutine_(prof, all) };
+}
+// Saved routines take turns: the one after the routine finished last is up next (same rule as the Workouts page).
+function nextRoutine_(prof, all) {
+  const routines = Array.isArray(prof.routines) ? prof.routines : [];
+  if (!routines.length) return '';
+  const done = all.filter(d => d.kind === 'workout' && d.data.finishedAt)
+    .sort((a, b) => toMs_(b.data.finishedAt) - toMs_(a.data.finishedAt));
+  for (let k = 0; k < done.length; k++) {
+    const w = done[k].data, name = String(w.name || '').trim().toLowerCase();
+    const i = routines.findIndex(r => r.id === w.routineId || String(r.name || '').trim().toLowerCase() === name);
+    if (i >= 0) return String(routines[(i + 1) % routines.length].name || '');
+  }
+  return String(routines[0].name || '');
 }
 // Workout days in the last `n` days (not today) with no finished workout.
 function workoutMisses_(n) {
+  if (WORKOUT_TASK) return [];
   const w = workoutState_(), out = [], tz = Session.getScriptTimeZone();
   const p = Utilities.formatDate(new Date(), tz, 'yyyy-MM-dd').split('-').map(Number);
   for (let i = n; i >= 1; i--) {

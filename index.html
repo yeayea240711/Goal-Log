@@ -102,6 +102,7 @@ input, select, textarea { font: inherit; color: var(--ink); background: var(--su
 .pill { display: inline-block; font-size: 11px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; padding: 2px 7px; border-radius: 999px; margin-left: 6px; vertical-align: 1px; }
 .pill.cantmiss { background: var(--miss-soft); color: var(--miss); }
 .pill.normal { background: var(--nag-soft); color: var(--nag); }
+.pill.repeat { background: var(--sunk); color: var(--accent); }
 .pill.light { background: var(--sunk); color: var(--muted); }
 .ask { grid-column: 1 / -1; background: var(--sunk); border-radius: 10px; padding: 10px; display: grid; gap: 8px; }
 .ask input { background: var(--surface); }
@@ -183,6 +184,12 @@ input, select, textarea { font: inherit; color: var(--ink); background: var(--su
           </select>
         </label>
         <label>Start reminding me<input id="f-nag" type="datetime-local"></label>
+        <label>Repeat
+          <select id="f-repeat">
+            <option value="">Just this once</option>
+            <option value="daily">Every day</option>
+          </select>
+        </label>
         <label>Remind every
           <select id="f-every">
             <option value="0">Just once</option>
@@ -388,10 +395,11 @@ function slots(t) {
 function planText(t) {
   const start = parse(t.start_at), nag = parse(t.nag_at);
   if (!start) return "Pick a date and time.";
-  if (!nag || nag >= start) return `You'll get one reminder, at <b>${esc(fmtWhen(start))}</b>.`;
+  const again = t.repeat === "daily" ? " Then it repeats every day at the same time." : "";
+  if (!nag || nag >= start) return `You'll get one reminder, at <b>${esc(fmtWhen(start))}</b>.${again}`;
   const every = Number(t.every) || 0;
   const evText = every ? `, then every <b>${every >= 60 ? every / 60 + " hr" : every + " min"}</b>` : "";
-  return `Reminders start <b>${esc(fmtWhen(nag))}</b>${evText}, until it starts at <b>${esc(fmtWhen(start))}</b>. That's <b>${slots(t).length} reminders</b> by email${DEMO ? " (once connected)" : ""}.`;
+  return `Reminders start <b>${esc(fmtWhen(nag))}</b>${evText}, until it starts at <b>${esc(fmtWhen(start))}</b>. That's <b>${slots(t).length} reminders</b> by email${DEMO ? " (once connected)" : ""}.${again}`;
 }
 
 // ---------- sign in ----------
@@ -432,7 +440,7 @@ async function refresh() {
 const EXAMPLES = [
   "Interview Nov 2 at 7am. Start reminding me Nov 1 at 7pm, every hour.",
   "Workout tomorrow 6am",
-  "Read scripture tonight at 9pm, remind me at 8:30",
+  "Read scripture every day at 9pm, remind me at 8:30",
   "Call Chief Radtke Monday 10am, can't miss it"
 ];
 $("examples").innerHTML = EXAMPLES.map((e, i) => `<button class="chip" data-ex="${i}">${esc(e)}</button>`).join("");
@@ -445,6 +453,7 @@ function openForm(t) {
   $("f-nag").value = toInput(parse(t.nag_at));
   $("f-every").value = String(t.every ?? 120);
   $("f-level").value = t.level || "normal";
+  $("f-repeat").value = t.repeat || "";
   $("save-err").textContent = "";
   $("confirm").hidden = false;
   updatePlan();
@@ -452,10 +461,10 @@ function openForm(t) {
 }
 function formTask() {
   const s = fromInput($("f-start").value), n = fromInput($("f-nag").value);
-  return { title: $("f-title").value.trim(), start_at: s ? s.toISOString() : "", nag_at: n ? n.toISOString() : null, every: Number($("f-every").value), level: $("f-level").value };
+  return { title: $("f-title").value.trim(), start_at: s ? s.toISOString() : "", nag_at: n ? n.toISOString() : null, every: Number($("f-every").value), level: $("f-level").value, repeat: $("f-repeat").value };
 }
 function updatePlan() { $("f-plan").innerHTML = planText(formTask()); }
-["f-title", "f-start", "f-nag", "f-every"].forEach((id) => $(id).addEventListener("input", updatePlan));
+["f-title", "f-start", "f-nag", "f-every", "f-repeat"].forEach((id) => $(id).addEventListener("input", updatePlan));
 $("f-level").addEventListener("change", () => {
   $("f-every").value = String({ light: 0, normal: 120, cantmiss: 60 }[$("f-level").value]);
   const s = fromInput($("f-start").value);
@@ -469,7 +478,7 @@ $("add-btn").addEventListener("click", () => {
   if (!chrono) { $("say-status").textContent = "Couldn't read the date. Fill in the details below."; openForm({ title: text }); return; }
   const r = parseRequest(text, new Date(), chrono);
   $("say-status").textContent = r.start ? "" : "I couldn't find a date. Pick one below.";
-  openForm({ title: r.title, start_at: r.start && r.start.toISOString(), nag_at: r.nagStart && r.nagStart.toISOString(), every: r.every, level: r.level });
+  openForm({ title: r.title, start_at: r.start && r.start.toISOString(), nag_at: r.nagStart && r.nagStart.toISOString(), every: r.every, level: r.level, repeat: r.repeat });
 });
 $("manual-btn").addEventListener("click", () => {
   const s = new Date(Date.now() + DAY); s.setMinutes(0, 0, 0);
@@ -493,7 +502,7 @@ $("save-btn").addEventListener("click", async () => {
 // ---------- rendering ----------
 function pill(t) {
   const name = { light: "Light", normal: "Nag", cantmiss: "Can't miss" }[t.level] || "";
-  return name ? `<span class="pill ${t.level}">${name}</span>` : "";
+  return (name ? `<span class="pill ${t.level}">${name}</span>` : "") + (t.repeat === "daily" ? `<span class="pill repeat">Every day</span>` : "");
 }
 function nextReminder(t) {
   const n = slots(t).find((x) => x > Date.now());

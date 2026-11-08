@@ -136,6 +136,8 @@ input, select, textarea { font: inherit; color: var(--ink); background: var(--su
 .strip i { aspect-ratio: 1; border-radius: 4px; background: var(--sunk); display: grid; place-items: center; font-style: normal; font-size: 10px; font-weight: 700; color: #fff; }
 .strip i.done { background: var(--done); }
 .strip i.missed { background: var(--miss); }
+.ev .detail { font-size: 14px; margin-top: 2px; }
+.ev .detail a { color: var(--accent); text-decoration: none; font-weight: 600; }
 .whys { display: grid; gap: 6px; font-size: 14px; }
 .whys div { border-left: 3px solid var(--miss); padding-left: 8px; }
 .demo { background: var(--nag-soft); border: 1px solid var(--nag); border-radius: 12px; padding: 10px 14px; font-size: 14px; grid-column: 1 / -1; }
@@ -527,14 +529,14 @@ const timeCell = (d) => `<div class="time"><b>${esc(fmtTime(d))}</b>${esc(fmtDay
 function upRow(t) {
   const d = parse(t.start_at);
   return `<div class="ev" data-id="${esc(t.id)}">${timeCell(d)}
-    <div><div class="title">${esc(t.title)}${pill(t)}</div><div class="meta">In ${esc(untilText(d - Date.now()))}. ${esc(nextReminder(t))}</div></div>
+    <div><div class="title">${esc(t.title)}${pill(t)}</div>${t.detail ? `<div class="detail"><a href="workouts.html">${esc(t.detail)}</a></div>` : ""}<div class="meta">In ${esc(untilText(d - Date.now()))}. ${esc(nextReminder(t))}</div></div>
     <div class="acts"><button class="small" data-act="done">Done</button><button class="small" data-act="edit">Edit</button><button class="small danger" data-act="delete">Delete</button></div>
   </div>`;
 }
 function askRow(t) {
   const d = parse(t.start_at);
   return `<div class="ev" data-id="${esc(t.id)}">${timeCell(d)}
-    <div><div class="title">${esc(t.title)}${pill(t)}</div><div class="meta">This was due ${esc(untilText(Date.now() - d))} ago.</div></div>
+    <div><div class="title">${esc(t.title)}${pill(t)}</div>${t.detail ? `<div class="detail"><a href="workouts.html">${esc(t.detail)}</a></div>` : ""}<div class="meta">This was due ${esc(untilText(Date.now() - d))} ago.</div></div>
     <div class="acts"><button class="small" data-act="done">Did it</button><button class="small danger" data-act="miss">Missed it</button></div>
     <div class="ask" data-ask hidden>
       <label class="label" for="why-${esc(t.id)}">Why didn't it happen?</label>

@@ -615,10 +615,14 @@ function bodyweightCard(compact) {
   return `<section class="card">${h}</section>`;
 }
 
-// Your saved routines take turns: the one after the routine you finished last is up next.
+// The starter plans and your saved routines take turns: the one after the routine you finished last is up next.
+// Goal Log's Google script uses the same order (DEFAULT_ROUTINES in Code.gs), so keep the two in step.
+function rotation() {
+  const names = new Set(STARTERS.map((r) => r.name.trim().toLowerCase()));
+  return STARTERS.concat(S.profile.routines.filter((r) => !names.has(r.name.trim().toLowerCase())));
+}
 function upNext() {
-  const routines = S.profile.routines;
-  if (!routines.length) return null;
+  const routines = rotation();
   for (const [, w] of finished()) {
     const i = routines.findIndex((r) => r.id === w.routineId || r.name.trim().toLowerCase() === String(w.name || "").trim().toLowerCase());
     if (i >= 0) return routines[(i + 1) % routines.length];
@@ -628,7 +632,7 @@ function upNext() {
 function startView() {
   const routines = S.profile.routines;
   const lastW = finished()[0], next = upNext();
-  const rows = (list, starter) => list.map((r) => `<div class="routine"><div><h3>${esc(r.name)}${!starter && next && r.id === next.id && routines.length > 1 ? ` <span class="upnext">Up next</span>` : ""}</h3><p>${esc(r.exercises.map((e) => e.name).join(" · "))}</p></div>
+  const rows = (list, starter) => list.map((r) => `<div class="routine"><div><h3>${esc(r.name)}${next && r.id === next.id ? ` <span class="upnext">Up next</span>` : ""}</h3><p>${esc(r.exercises.map((e) => e.name).join(" · "))}</p></div>
     <div class="row" style="flex-wrap:nowrap">${starter ? "" : confirmBtn("rr-" + r.id, "✕", "rm-routine", `data-id="${r.id}" aria-label="Delete routine"`, "ghost")}
     <button class="primary" data-act="start" data-id="${r.id}" data-starter="${starter ? 1 : ""}">Start</button></div></div>`).join("");
   return `
@@ -637,7 +641,7 @@ function startView() {
     <h2>Start a workout</h2>
     ${lastW ? `<div class="muted small">Last session: ${esc(lastW[1].name)}, ${fmtDate(lastW[1].startedAt)}</div>` : ""}</div>
     ${lastW && dayKey(new Date(lastW[1].finishedAt)) === dayKey() ? `<div class="reopen"><div style="min-width:0"><b>Finished ${esc(lastW[1].name)} by mistake?</b><div class="muted small">Reopen it to keep checking off sets. Everything you logged is still there.</div></div><button class="primary" data-act="resume" data-id="${lastW[0]}">Reopen</button></div>` : ""}
-    ${next && routines.length > 1 ? `<div class="reopen upnext-card"><div style="min-width:0"><div class="label">Up next</div><b>${esc(next.name)}</b></div><button class="primary" data-act="start" data-id="${next.id}">Start</button></div>` : ""}
+    ${next ? `<div class="reopen upnext-card"><div style="min-width:0"><div class="label">Today's workout</div><b>${esc(next.name)}</b><div class="muted small">${esc(next.exercises.map((e) => e.name).join(" · "))}</div></div><button class="primary" data-act="start" data-id="${next.id}" data-starter="${next.id.startsWith("s-") ? 1 : ""}">Start</button></div>` : ""}
     ${routines.length ? `<div>${rows(routines, false)}</div>` : ""}
     <div class="two"><button data-act="start-empty">Empty workout</button><button data-act="start-cardio">Cardio session</button></div>
   </section>
@@ -1495,7 +1499,7 @@ document.addEventListener("click", (ev) => {
     case "start": {
       if (A) { toast("Finish or discard your current workout first."); break; }
       const r = (d.starter ? STARTERS : S.profile.routines).find((x) => x.id === d.id); if (!r) break;
-      newWorkout(r.name, r.exercises.map((e) => ({ name: e.name, ...(e.type === "cardio" ? { type: "cardio" } : {}), sets: setsFor(e.name, e.sets || (e.type === "cardio" ? 1 : 3), e.r, e.type) })), d.starter ? null : r.id);
+      newWorkout(r.name, r.exercises.map((e) => ({ name: e.name, ...(e.type === "cardio" ? { type: "cardio" } : {}), sets: setsFor(e.name, e.sets || (e.type === "cardio" ? 1 : 3), e.r, e.type) })), r.id);
       break;
     }
     case "start-empty": if (!A) S.addType = "strength", newWorkout(fmtDate(new Date(), { weekday: "long" }) + " workout", []); break;

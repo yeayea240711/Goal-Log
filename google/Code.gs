@@ -28,6 +28,16 @@ const DAILY_TASKS = [
   { title: 'Read scripture', at: '21:00', remindFrom: '17:00', every: 120 },
   { title: 'Workout', at: '21:00', remindFrom: '17:00', every: 120, workout: true }
 ];
+// The Workouts page's starter plans, in the order they take turns (keep in step with STARTERS in workouts.html).
+const DEFAULT_ROUTINES = [
+  { id: 's-push', name: 'Push day', exercises: ['Bench Press', 'Overhead Press', 'Incline Dumbbell Press', 'Triceps Pushdown'] },
+  { id: 's-pull', name: 'Pull day', exercises: ['Deadlift', 'Barbell Row', 'Lat Pulldown', 'Dumbbell Curl'] },
+  { id: 's-legs', name: 'Leg day', exercises: ['Back Squat', 'Romanian Deadlift', 'Leg Press', 'Calf Raise'] },
+  { id: 's-dunk', name: 'Dunk & firefighter leg day', exercises: ['Pogo Hops', 'Box Jump (both legs)', 'Single-Leg Jump (each leg)', 'Hang Clean', 'Kettlebell Swing', 'Hex Bar Squat', 'Kettlebell Bulgarian Split Squat (each leg)', 'Eccentric Leg Curl', 'Calf Isometric Hold (seconds)', 'Single-Leg Calf Raise (each leg)', 'StairMaster'] },
+  { id: 's-dunkday', name: 'Dunk practice day', exercises: ['Pogo Hops', 'Approach Jump (both legs)', 'Approach Jump (one leg)', 'Broad Jump', 'Dunk Attempts'] },
+  { id: 's-core', name: 'Abs & obliques', exercises: ['Crunch', 'Hanging Leg Raise', 'Plank (seconds)', 'Russian Twist', 'Bicycle Crunch', 'Side Plank (seconds)', 'Cable Woodchopper'] },
+  { id: 's-cardio', name: 'Cardio day', exercises: ['Treadmill', 'Stationary Bike', 'Rowing Machine', 'StairMaster'] }
+];
 const MISSED_BY_MIDNIGHT = 'Not done by the end of the day';
 const WORKOUT_TASK = DAILY_TASKS.filter(d => d.workout).map(d => d.title)[0] || '';
 
@@ -60,7 +70,11 @@ function doPost(e) {
 const ACTIONS = {
   check: () => ({ ok: true, email: to_() }),
 
-  list: () => { dailyTasks_(Date.now()); return readAll_().map(public_); },
+  list: () => {
+    dailyTasks_(Date.now());
+    const next = WORKOUT_TASK ? routineText_(workoutState_().next) : '';
+    return readAll_().map(r => Object.assign(public_(r), r.title === WORKOUT_TASK && r.status === 'open' && next ? { detail: 'Up next: ' + next } : {}));
+  },
 
   save: b => {
     const t = b.task || {};
@@ -252,7 +266,7 @@ function workoutReminder_() {
   const last = slot === WORKOUT_HOURS[WORKOUT_HOURS.length - 1];
   const site = SITE_URL + 'workouts.html';
   MailApp.sendEmail({ to: to_(), subject: (last ? '🔔 Last call: ' : '🏋️ ') + 'Workout day',
-    htmlBody: wrap_('<p style="font-size:18px;margin:0 0 6px"><b>Today is a workout day.</b></p>' + (w.next ? '<p style="margin:0 0 6px">Up next: <b>' + esc_(w.next) + '</b></p>' : '') + '<p style="margin:0">You haven\'t finished a workout yet.' +
+    htmlBody: wrap_('<p style="font-size:18px;margin:0 0 6px"><b>Today is a workout day.</b></p>' + (w.next ? '<p style="margin:0 0 6px">Up next: <b>' + esc_(w.next.name) + '</b></p>' : '') + '<p style="margin:0">You haven\'t finished a workout yet.' +
       (last ? ' This is the last reminder today.' : '') + '</p>' +
       '<p style="margin:18px 0 0"><a href="' + site + '" style="background:#1d6b57;color:#fff;padding:10px 16px;border-radius:8px;text-decoration:none;font-weight:600">Open Workouts</a></p>') });
 }
@@ -268,14 +282,14 @@ function morningPlan() {
   const waiting = all.filter(r => r.status === 'open' && toMs_(r.start_at) < Date.now() - ASK_AFTER_MIN * 60000);
   const w = workoutState_();
   const workoutToday = !WORKOUT_TASK && w.isPlanDay(today) && !w.doneDays[today];
-  const upNext = r => r.title === WORKOUT_TASK && w.next ? ' (up next: ' + esc_(w.next) + ')' : '';
+  const upNext = r => r.title === WORKOUT_TASK && w.next ? ' (up next: ' + esc_(routineText_(w.next)) + ')' : '';
   const skipped = workoutMisses_(7).filter(m => !m.reason);
   const p = today.split('-').map(Number), yesterday = Utilities.formatDate(new Date(Date.UTC(p[0], p[1] - 1, p[2] - 1, 12)), 'UTC', 'yyyy-MM-dd');
   const missedYesterday = all.filter(r => r.repeat === 'daily' && r.status === 'missed' && Utilities.formatDate(new Date(toMs_(r.start_at)), tz, 'yyyy-MM-dd') === yesterday);
   if (!todays.length && !waiting.length && !workoutToday && !skipped.length && !missedYesterday.length) return;
   let html = '';
   if (missedYesterday.length) html += '<p style="margin:0 0 14px;color:#b13a2d"><b>✕ Missed yesterday:</b> ' + missedYesterday.map(r => esc_(r.title)).join(', ') + '. Today is a new day.</p>';
-  if (workoutToday) html += '<p style="font-size:16px;margin:0 0 12px">🏋️ <b>Workout day today.</b>' + (w.next ? ' Up next: ' + esc_(w.next) + '.' : '') + '</p>';
+  if (workoutToday) html += '<p style="font-size:16px;margin:0 0 12px">🏋️ <b>Workout day today.</b>' + (w.next ? ' Up next: ' + esc_(w.next.name) + '.' : '') + '</p>';
   if (todays.length) html += '<h3 style="margin:0 0 8px">Today</h3><ul>' + todays.map(r => '<li><b>' + time_(r.start_at) + '</b> ' + esc_(r.title) + upNext(r) + (r.level === 'cantmiss' ? ' <span style="color:#b13a2d">(can\'t miss)</span>' : '') + '</li>').join('') + '</ul>';
   if (waiting.length) html += '<h3 style="margin:16px 0 8px">Still waiting on an answer</h3><ul>' + waiting.map(r => '<li>' + esc_(r.title) + ' (' + when_(r.start_at) + ')</li>').join('') + '</ul>';
   if (skipped.length) html += '<h3 style="margin:16px 0 8px">Workouts you skipped</h3><ul>' + skipped.map(m => '<li>' + dayName_(m.day) + '</li>').join('') + '</ul><p style="margin:0">Say why in Goal Log.</p>';
@@ -299,8 +313,8 @@ function slots_(r) {
 function email_(kind, r) {
   const start = toMs_(r.start_at);
   const left = start - Date.now();
-  const next = r.title === WORKOUT_TASK ? workoutState_().next : '';
-  const extra = next ? '<p style="margin:6px 0 0">Up next: <b>' + esc_(next) + '</b></p>' : '';
+  const next = r.title === WORKOUT_TASK ? workoutState_().next : null;
+  const extra = next ? '<p style="margin:6px 0 0">Up next: <b>' + esc_(next.name) + '</b></p>' + (next.exercises.length ? '<p style="margin:2px 0 0;color:#5b6862">' + esc_(next.exercises.join(' · ')) + '</p>' : '') : '';
   const subjects = {
     reminder: '⏰ ' + r.title + ' in ' + until_(left),
     now: '🔔 Now: ' + r.title,
@@ -419,17 +433,22 @@ function workoutState_() {
 }
 // Saved routines take turns: the one after the routine finished last is up next (same rule as the Workouts page).
 function nextRoutine_(prof, all) {
-  const routines = Array.isArray(prof.routines) ? prof.routines : [];
-  if (!routines.length) return '';
+  const key = n => String(n || '').trim().toLowerCase();
+  const starters = DEFAULT_ROUTINES.map(r => key(r.name));
+  const saved = (Array.isArray(prof.routines) ? prof.routines : []).filter(r => starters.indexOf(key(r.name)) < 0)
+    .map(r => ({ id: r.id, name: String(r.name || ''), exercises: (r.exercises || []).map(e => String(e.name || '')) }));
+  const routines = DEFAULT_ROUTINES.concat(saved);
   const done = all.filter(d => d.kind === 'workout' && d.data.finishedAt)
     .sort((a, b) => toMs_(b.data.finishedAt) - toMs_(a.data.finishedAt));
   for (let k = 0; k < done.length; k++) {
     const w = done[k].data, name = String(w.name || '').trim().toLowerCase();
     const i = routines.findIndex(r => r.id === w.routineId || String(r.name || '').trim().toLowerCase() === name);
-    if (i >= 0) return String(routines[(i + 1) % routines.length].name || '');
+    if (i >= 0) return routines[(i + 1) % routines.length];
   }
-  return String(routines[0].name || '');
+  return routines[0];
 }
+// "Push day: Bench Press, Overhead Press, …" for the Workout task
+function routineText_(r) { return r ? r.name + (r.exercises.length ? ': ' + r.exercises.join(', ') : '') : ''; }
 // Workout days in the last `n` days (not today) with no finished workout.
 function workoutMisses_(n) {
   if (WORKOUT_TASK) return [];

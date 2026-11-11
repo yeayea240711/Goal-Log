@@ -396,6 +396,9 @@ const ROW_FIELDS = [["min", "Time (min)"], ["m", "Meters"], ["split", "Split /50
 const TIME_KEYS = new Set(["split", "avg"]);
 const isTread = (n) => /treadmill|incline walk/i.test(n);
 const TREAD_FIELDS = [["min", "Time (min)"], ["dist", "Distance"], ["speed", "Speed"], ["incline", "Incline %"], ["cal", "Calories"], ["hr", "Heart rate"]];
+// broad and long jumps are logged in feet instead of weight: no unit conversion, no volume
+const isJump = (n) => /\b(broad|long)\s+jumps?\b/i.test(n);
+const jconv = (name, v, from, to) => (isJump(name) ? (v === "" || v == null || isNaN(v) ? null : Number(v)) : conv(v, from, to));
 const machine = (n) => (isStair(n) ? "stair" : isRow(n) ? "row" : isTread(n) ? "tread" : null);
 const MFIELDS = { stair: STAIR_FIELDS, row: ROW_FIELDS, tread: TREAD_FIELDS };
 // "2:24.0" -> 144 seconds; plain numbers stay as typed
@@ -436,7 +439,7 @@ function bestWeight(name, excludeId) {
   for (const [id, w] of finished()) {
     if (id === excludeId) continue;
     for (const e of w.exercises) if (exKey(e.name) === k && !isCardio(e)) for (const s of e.sets)
-      if (s.done && s.w !== "") { const v = conv(s.w, w.unit || "lb", "kg"); if (best == null || v > best) best = v; }
+      if (s.done && s.w !== "") { const v = jconv(e.name, s.w, w.unit || "lb", "kg"); if (best == null || v > best) best = v; }
   }
   return best;
 }
@@ -447,7 +450,7 @@ function workoutStats(w) {
     for (const s of e.sets) {
       total++; if (!s.done) continue; done++;
       if (isCardio(e)) { cmin += Number(s.min) || 0; cdist += convD(s.dist, w.unit, U()) || 0; }
-      else if (s.w !== "" && s.r !== "") vol += conv(s.w, w.unit || "lb", U()) * Number(s.r);
+      else if (s.w !== "" && s.r !== "" && !isJump(e.name)) vol += conv(s.w, w.unit || "lb", U()) * Number(s.r);
     }
   }
   const mins = w.finishedAt ? Math.max(1, Math.round((new Date(w.finishedAt) - new Date(w.startedAt)) / 60000)) : null;
@@ -748,15 +751,16 @@ function workoutView(id, w) {
     if (isCardio(e)) return cardioCard(id, w, e, ei);
     const last = lastSets(e.name, id);
     const best = bestWeight(e.name, id);
-    const lastTxt = last ? `Last time (${fmtDate(last.date, { month: "short", day: "numeric" })}): ` + last.sets.map((s) => `${disp(s.w, last.unit)}×${s.r || "–"}`).join(", ") : "First time logging this one";
+    const jump = isJump(e.name), wu = jump ? "ft" : u;
+    const lastTxt = last ? `Last time (${fmtDate(last.date, { month: "short", day: "numeric" })}): ` + last.sets.map((s) => `${jump ? fmtNum(jconv(e.name, s.w)) + " ft" : disp(s.w, last.unit)}×${s.r || "–"}`).join(", ") : "First time logging this one";
     const sets = e.sets.map((s, si) => {
       const p = last && last.sets[si];
-      const pw = p ? fmtNum(conv(p.w, last.unit, u)) : "", pr = p ? (p.r ?? "") : "";
-      const isPR = s.done && s.w !== "" && (best == null || conv(s.w, u, "kg") > best + 1e-6) && last;
+      const pw = p ? fmtNum(jconv(e.name, p.w, last.unit, u)) : "", pr = p ? (p.r ?? "") : "";
+      const isPR = s.done && s.w !== "" && (best == null || jconv(e.name, s.w, u, "kg") > best + 1e-6) && last;
       return `<div class="set ${s.done ? "done" : ""}">
         <span class="n">${si + 1}</span>
         <span class="prev">${p && pw !== "–" ? `${pw}×${pr}` : "–"}${isPR ? '<span class="pr">PR</span>' : ""}</span>
-        <input id="w-${ei}-${si}" data-in="w" data-e="${ei}" data-s="${si}" inputmode="decimal" autocomplete="off" value="${esc(s.w)}" placeholder="${esc(pw === "–" ? "" : pw)}" aria-label="${esc(e.name)} set ${si + 1} weight in ${u}">
+        <input id="w-${ei}-${si}" data-in="w" data-e="${ei}" data-s="${si}" inputmode="decimal" autocomplete="off" value="${esc(s.w)}" placeholder="${esc(pw === "–" ? "" : pw)}" aria-label="${esc(e.name)} set ${si + 1} ${jump ? "distance in feet" : "weight in " + u}">
         <input id="r-${ei}-${si}" data-in="r" data-e="${ei}" data-s="${si}" inputmode="numeric" autocomplete="off" value="${esc(s.r)}" placeholder="${esc(pr)}" aria-label="${esc(e.name)} set ${si + 1} reps">
         <button class="check" data-act="toggle" data-e="${ei}" data-s="${si}" aria-pressed="${s.done ? "true" : "false"}" aria-label="Mark set ${si + 1} done">${CHECK}</button>
       </div>`;
@@ -764,7 +768,7 @@ function workoutView(id, w) {
     return `<section class="card">
       <div class="ex-title"><div><h3>${esc(e.name)}</h3><div class="last">${esc(lastTxt)}</div></div>
       ${confirmBtn("re-" + ei, "Remove", "rm-ex", `data-e="${ei}"`, "ghost")}</div>
-      <div class="sets"><div class="set head"><span>Set</span><span>Prev</span><span>${u}</span><span>Reps</span><span>Done</span></div>${sets}</div>
+      <div class="sets"><div class="set head"><span>Set</span><span>Prev</span><span>${wu}</span><span>${jump ? "Jumps" : "Reps"}</span><span>Done</span></div>${sets}</div>
       <div class="row"><button data-act="add-set" data-e="${ei}">+ Add set</button>${e.sets.length > 1 ? `<button class="ghost" data-act="rm-set" data-e="${ei}">Remove last set</button>` : ""}</div>
     </section>`;
   }).join("");
@@ -857,7 +861,7 @@ function historyView() {
     h += `<section class="card hist-item" data-act="hist-open" data-id="${id}">
       <div class="row between"><div><h3>${esc(w.name)}${w.incomplete ? ` <span class="upnext" style="color:var(--hot)">Incomplete</span>` : ""}</h3><div class="muted small">${fmtDate(w.startedAt)} · ${fmtTime(w.startedAt)}</div></div><span class="muted" aria-hidden="true">${open ? "▴" : "▾"}</span></div>
       <div class="stats"><div class="stat"><b>${st.done}</b><span>Sets</span></div>${st.strength ? `<div class="stat"><b>${Math.round(st.vol).toLocaleString()}</b><span>Volume ${U()}</span></div>` : ""}${st.cardio ? `<div class="stat"><b>${fmtNum(st.cmin)}</b><span>Cardio min</span></div>${st.cdist ? `<div class="stat"><b>${fmtNum(st.cdist)}</b><span>${DU()}</span></div>` : ""}` : ""}<div class="stat"><b>${st.mins}</b><span>Minutes</span></div></div>
-      ${open ? `<div class="detail">${w.exercises.map((e) => `<div><span>${esc(e.name)}</span><span>${e.sets.filter((s) => s.done).map((s) => isCardio(e) ? cardioTxt(s, w.unit) : `${disp(s.w, w.unit)}×${s.r || "–"}`).join(", ") || "no sets done"}</span></div>`).join("")}</div>
+      ${open ? `<div class="detail">${w.exercises.map((e) => `<div><span>${esc(e.name)}</span><span>${e.sets.filter((s) => s.done).map((s) => isCardio(e) ? cardioTxt(s, w.unit) : isJump(e.name) ? `${fmtNum(Number(s.w))} ft×${s.r || "–"}` : `${disp(s.w, w.unit)}×${s.r || "–"}`).join(", ") || "no sets done"}</span></div>`).join("")}</div>
       <div class="row"><button class="primary" data-act="resume" data-id="${id}">Reopen workout</button><button data-act="repeat" data-id="${id}">Start fresh copy</button>${confirmBtn("hd-" + id, "Delete", "hist-del", `data-id="${id}"`)}</div>` : ""}
     </section>`;
   }
@@ -935,14 +939,15 @@ function progressView() {
     for (const [, w] of [...finished()].reverse()) {
       const u = w.unit || "lb"; let top = null;
       for (const e of w.exercises) if (exKey(e.name) === sel) for (const s of e.sets) if (s.done && s.w !== "") {
-        const v = conv(s.w, u, U()); if (top == null || v > top) top = v;
-        if (s.r) est = Math.max(est, v * (1 + Number(s.r) / 30));
+        const v = jconv(e.name, s.w, u, U()); if (top == null || v > top) top = v;
+        if (s.r && !isJump(e.name)) est = Math.max(est, v * (1 + Number(s.r) / 30));
       }
       if (top != null) { pts.push({ x: new Date(w.startedAt), y: top }); if (best == null || top > best) best = top; }
     }
+    const pu = isJump(names.get(sel) || "") ? "ft" : U();
     ex += picker() + `
-      <div class="stats"><div class="stat"><b>${fmtNum(best)}</b><span>Best ${U()}</span></div><div class="stat"><b>${fmtNum(pts[pts.length - 1].y)}</b><span>Last ${U()}</span></div><div class="stat"><b>${fmtNum(round(est, 1))}</b><span>Est. 1-rep max</span></div><div class="stat"><b>${pts.length}</b><span>Sessions</span></div></div>
-      ${chart(pts, U())}`;
+      <div class="stats"><div class="stat"><b>${fmtNum(best)}</b><span>Best ${pu}</span></div><div class="stat"><b>${fmtNum(pts[pts.length - 1].y)}</b><span>Last ${pu}</span></div>${pu === "ft" ? "" : `<div class="stat"><b>${fmtNum(round(est, 1))}</b><span>Est. 1-rep max</span></div>`}<div class="stat"><b>${pts.length}</b><span>Sessions</span></div></div>
+      ${chart(pts, pu)}`;
   }
   ex += `</section>`;
   const settings = `<section class="card"><h3>Settings</h3>
@@ -1528,7 +1533,7 @@ document.addEventListener("click", (ev) => {
       const stale = !w.past && dayKey(new Date(w.startedAt)) < dayKey();
       w.finishedAt = w.past || stale ? new Date(new Date(w.startedAt).getTime() + (Number(w.dur) || 60) * 60000).toISOString() : new Date().toISOString(); S.rest = null; tickRest();
       if (act === "finish-incomplete" || st.done < st.total) w.incomplete = true; else delete w.incomplete;
-      store.save(wid); toast((w.incomplete ? "Saved as incomplete: " : "Saved: ") + [st.strength ? `${Math.round(st.vol).toLocaleString()} ${U()} lifted` : "", st.cardio ? `${fmtNum(st.cmin)} min cardio` : ""].filter(Boolean).join(", ") + ".");
+      store.save(wid); toast((w.incomplete ? "Saved as incomplete: " : "Saved: ") + [st.strength ? (st.vol ? `${Math.round(st.vol).toLocaleString()} ${U()} lifted` : `${st.done} set${st.done === 1 ? "" : "s"} done`) : "", st.cardio ? `${fmtNum(st.cmin)} min cardio` : ""].filter(Boolean).join(", ") + ".");
       render(); window.scrollTo(0, 0); break;
     }
     case "discard": S.rest = null; tickRest(); store.remove(wid); render(); break;
